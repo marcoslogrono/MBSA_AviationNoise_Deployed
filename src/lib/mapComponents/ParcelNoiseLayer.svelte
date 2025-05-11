@@ -693,6 +693,7 @@
         }
     }
 
+    // Update the setupParcelClickHandler function to handle popup closures better
     function setupParcelClickHandler() {
         // Create a single popup instance to reuse
         let currentPopup = null;
@@ -777,7 +778,37 @@
             // Add an event listener to clear the reference when popup is closed
             currentPopup.on('close', () => {
                 currentPopup = null;
+                // Also close any other popups that might be open
+                document.querySelectorAll('.mapboxgl-popup').forEach(popup => {
+                    popup.remove();
+                });
             });
+        });
+
+        // Add a custom handler for the close button in popups
+        document.addEventListener('click', (e) => {
+            // Check if the clicked element is a popup close button
+            if (e.target.className === 'mapboxgl-popup-close-button') {
+                // Close all popups
+                document.querySelectorAll('.mapboxgl-popup').forEach(popup => {
+                    popup.remove();
+                });
+                currentPopup = null;
+            }
+        }, true);
+        
+        // Also add a handler for the summary tooltip close button
+        document.addEventListener('click', (e) => {
+            if (e.target.id === 'close-summary-btn') {
+                // Hide the summary tooltip
+                d3.select("#summary-tooltip").style("opacity", 0);
+                clearSelectedParcels();
+                // Also remove any mapbox popups
+                document.querySelectorAll('.mapboxgl-popup').forEach(popup => {
+                    popup.remove();
+                });
+                currentPopup = null;
+            }
         });
     }
 
