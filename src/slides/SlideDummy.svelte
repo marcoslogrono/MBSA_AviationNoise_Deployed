@@ -16,24 +16,15 @@
         'Orange': '#f9773f',
         'Yellow': '#fcc478'
     };
-
-    // Reactive statement to monitor changes in value
-    /*
-    $: if (value === 1) {
-        console.log(isVisible)
-        observerStore.startObservation();
-        console.log(isVisible)
-    }*/
-
 </script>
 
 <div class="slide">
     <h1>Imagine having that aircraft noise interrupt you multiple times per day</h1>
     <p>
-        Depending on your proximity to flight paths, you may be exposed to Boston Logan's <strong>1000 aircraft operations</strong> daily.
+        Depending on your proximity to flight paths, you may be exposed to Boston Logan's <strong>1000 aircraft operations</strong> daily.<sup>[1]</sup>
     </p>
     <div class="noise-comparison">
-        <h3>What does aircraft noise sound like?</h3>
+        <h3>What does aircraft noise sound like? <sup>[3]</sup></h3>
         <table class="noise-table">
             <thead>
                 <tr>
@@ -65,7 +56,11 @@
                 </tr>
             </tbody>
         </table>
-        <p class="note">Although these noise levels do not seem high, the constant interruption can interrupt resident's rest and concentration. Even moderate noise levels (45+ dB) can disrupt sleep and increase stress when experienced regularly, especially at night.</p>
+        <p class="note">Although these noise levels do not seem high, the constant interruption can interrupt resident's rest and concentration. Even moderate noise levels (45+ dB) can disrupt sleep and increase stress when experienced regularly, especially at night.<sup>[2]</sup></p>
+    </div>
+    
+    <div class="citation">
+        Sources: [1] Massport Airport Traffic Summary (2025), [2] Effects of Transportation Noise on Human Health: A Review (PMC, 2022) [3] Decibel Level Comparison Chart (Yale, 2023)
     </div>
 </div>
 
@@ -124,5 +119,18 @@
     
     .low-medium-noise {
         color: #fcc478; /* Yellow */
+    }
+    
+    .citation {
+        font-size: 0.75rem;
+        color: #666;
+        margin-top: 2rem;
+        text-align: right;
+        font-style: italic;
+    }
+    
+    sup {
+        font-size: 0.7rem;
+        vertical-align: super;
     }
 </style>
