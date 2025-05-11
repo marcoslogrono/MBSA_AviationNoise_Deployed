@@ -253,7 +253,7 @@
         }
     }
 
-    // Modify the SVG overlay setup to initially hide the brush
+    // Replace the SVG overlay and brush setup with custom rectangle selection
     const svg = d3.select(map.getCanvasContainer())
         .append("svg")
         .style("position", "absolute")
@@ -261,17 +261,22 @@
         .style("left", "0px")
         .style("width", "100%")
         .style("height", "100%")
-        .style("pointer-events", "none"); // Prevents interference with map interactions
+        .style("pointer-events", "none"); // Initially no pointer events
 
-    const brush = d3.brush()
-        .extent([[0, 0], [map.getCanvas().width, map.getCanvas().height]])
-        .on("brush", brushed)
-        .on("end", brushEnded);
+    // Create a rectangle element for our selection box
+    const selectionRect = svg.append("rect")
+        .attr("class", "selection-rectangle")
+        .attr("width", 0)
+        .attr("height", 0)
+        .attr("fill", "rgba(0, 123, 255, 0.15)")
+        .attr("stroke", "#ffffff")
+        .attr("stroke-width", 1.5)
+        .attr("stroke-dasharray", "4,4")
+        .style("display", "none");
 
-    const brushGroup = svg.append("g")
-        .attr("class", "brush")
-        .call(brush)
-        .style("display", "none"); // Initially hidden
+    // Variables to track selection state
+    let firstPoint = null;
+    let isSelecting = false;
 
     // Add keyboard event listeners
     function setupKeyboardHandlers() {
@@ -279,7 +284,7 @@
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Alt') {
                 e.preventDefault(); // Prevent browser Alt menu from appearing
-                ctrlKeyPressed = true; // Still use same variable, just triggered by Alt now
+                ctrlKeyPressed = true;
                 activateMultiSelect();
             }
             
@@ -307,7 +312,6 @@
             }
         });
         
-        // Rest of your existing keyboard handlers
         document.addEventListener('keyup', (e) => {
             if (e.key === 'Alt') {
                 ctrlKeyPressed = false;
@@ -323,14 +327,18 @@
             }
         });
     }
-    
+
     // Activate multi-select mode
     function activateMultiSelect() {
         if (isMultiSelectActive) return;
         
         isMultiSelectActive = true;
-        brushGroup.style("display", "block");
-        brushGroup.style("pointer-events", "all");
+        
+        // Enable pointer events on the SVG overlay
+        svg.style("pointer-events", "all");
+        
+        // Add mouse event handlers
+        setupMouseHandlers();
         
         // Show visual indicator that multi-select is active
         showMultiSelectIndicator(true);
@@ -338,17 +346,22 @@
         // Change cursor to crosshair
         map.getCanvas().style.cursor = 'crosshair';
     }
-    
+
     // Deactivate multi-select mode
     function deactivateMultiSelect() {
         if (!isMultiSelectActive) return;
         
         isMultiSelectActive = false;
-        brushGroup.style("display", "none");
-        brushGroup.style("pointer-events", "none");
         
-        // Clear any ongoing brush selection
-        d3.brush().move(brushGroup, null);
+        // Disable pointer events on the SVG overlay
+        svg.style("pointer-events", "none");
+        
+        // Hide the selection rectangle
+        selectionRect.style("display", "none");
+        
+        // Reset selection state
+        firstPoint = null;
+        isSelecting = false;
         
         // Hide indicator
         showMultiSelectIndicator(false);
@@ -356,590 +369,601 @@
         // Reset cursor
         map.getCanvas().style.cursor = '';
     }
-    
-    // Visual indicator for multi-select mode
-    function showMultiSelectIndicator(show) {
-        let indicator = document.getElementById('multi-select-indicator');
-        
-        if (!indicator && show) {
-            // Create indicator if it doesn't exist
-            indicator = document.createElement('div');
-            indicator.id = 'multi-select-indicator';
-            indicator.textContent = 'Multi-Select Mode (Alt)'; // Changed from "Ctrl" to "Alt"
-            document.body.appendChild(indicator);
-        }
-        
-        if (indicator) {
-            indicator.style.display = show ? 'block' : 'none';
-        }
+
+    // Set up mouse handlers for custom selection
+    function setupMouseHandlers() {
+        svg
+            .on("mousedown", function(event) {
+                if (!isMultiSelectActive) return;
+                
+                // Prevent the map from handling this event
+                event.preventDefault();
+                event.stopPropagation();
+                
+                // Store the first point
+                const point = d3.pointer(event);
+                firstPoint = point;
+                isSelecting = true;
+                
+                // Initialize the rectangle at this point
+                selectionRect
+                    .attr("x", point[0])
+                    .attr("y", point[1])
+                    .attr("width", 0)
+                    .attr("height", 0)
+                    .style("display", "block");
+            })
+            .on("mousemove", function(event) {
+                if (!isMultiSelectActive || !isSelecting) return;
+                
+                const point = d3.pointer(event);
+                
+                // Calculate rectangle properties based on first point and current point
+                const x = Math.min(firstPoint[0], point[0]);
+                const y = Math.min(firstPoint[1], point[1]);
+                const width = Math.abs(point[0] - firstPoint[0]);
+                const height = Math.abs(point[1] - firstPoint[1]);
+                
+                // Update the rectangle
+                selectionRect
+                    .attr("x", x)
+                    .attr("y", y)
+                    .attr("width", width)
+                    .attr("height", height);
+            })
+            .on("mouseup", function(event) {
+                if (!isMultiSelectActive || !isSelecting) return;
+                
+                // Get the current point
+                const point = d3.pointer(event);
+                isSelecting = false;
+                
+                // Only process if we have a meaningful selection
+                if (Math.abs(point[0] - firstPoint[0]) > 5 && Math.abs(point[1] - firstPoint[1]) > 5) {
+                    // Convert the corner points to map coordinates
+                    const corner1 = map.unproject([firstPoint[0], firstPoint[1]]);
+                    const corner2 = map.unproject([point[0], point[1]]);
+                    
+                    // Find the southwest and northeast corners
+                    const sw = {
+                        lng: Math.min(corner1.lng, corner2.lng),
+                        lat: Math.min(corner1.lat, corner2.lat)
+                    };
+                    
+                    const ne = {
+                        lng: Math.max(corner1.lng, corner2.lng),
+                        lat: Math.max(corner1.lat, corner2.lat)
+                    };
+                    
+                    // Process the selection
+                    selectParcels([sw, ne]);
+                    
+                    // Position the summary tooltip
+                    const mouseX = event.clientX;
+                    const mouseY = event.clientY;
+                    
+                    const viewportWidth = window.innerWidth;
+                    const viewportHeight = window.innerHeight;
+                    
+                    const tooltipWidth = 420;
+                    const tooltipHeight = 500;
+                    const padding = 80; 
+                    
+                    let tooltipX = mouseX + padding;
+                    let tooltipY = mouseY - tooltipHeight/2; 
+                    
+                    if (tooltipX + tooltipWidth > viewportWidth - padding) {
+                        tooltipX = mouseX - tooltipWidth - padding;
+                    }
+                    
+                    if (tooltipY + tooltipHeight > viewportHeight - padding) {
+                        tooltipY = viewportHeight - tooltipHeight - padding;
+                    }
+                    if (tooltipY < padding) {
+                        tooltipY = padding;
+                    }
+                    
+                    tooltipX = Math.max(padding, Math.min(viewportWidth - tooltipWidth - padding, tooltipX));
+                    tooltipY = Math.max(padding, Math.min(viewportHeight - tooltipHeight - padding, tooltipY));
+                    
+                    d3.select("#summary-tooltip")
+                        .style("left", `${tooltipX}px`)
+                        .style("top", `${tooltipY}px`)
+                        .style("right", "auto")
+                        .style("bottom", "auto")
+                        .style("max-height", `${viewportHeight - (padding * 2)}px`)
+                        .style("overflow-y", "auto");
+                }
+                
+                // Hide the selection rectangle
+                selectionRect.style("display", "none");
+                firstPoint = null;
+            });
     }
 
-    // Modify the brush handlers to only work when multi-select is active
-    function brushed(event) {
-        if (!isMultiSelectActive) return;
+    function selectParcels(bounds) {
+        // Start with the simplified noise layer
+        const queryLayers = ['simplified-noise-layer'];
+
+        // Add dynamically generated parcel layers
+        for (let i = 0; i < currentBatchIndex; i++) {
+            queryLayers.push(`parcels-${i}`);
+        }
+
+        // Filter out layers that do not exist
+        const validLayers = queryLayers.filter(layer => map.getLayer(layer));
+
         
-        const selection = event.selection;
-        if (!selection) return;
-    
-        // Convert screen coordinates to map coordinates
-        const [x0, y0] = selection[0];
-        const [x1, y1] = selection[1];
+        console.log("Available layers before selection:", map.getStyle().layers.map(l => l.id));
+        console.log("Querying layers:", validLayers);
 
-        const nw = map.unproject([x0, y0]); // Top-left in [lng, lat]
-        const se = map.unproject([x1, y1]); // Bottom-right in [lng, lat]
-
-        console.log("Selected area:", nw, se);
-    }
-
-    function brushEnded(event) {
-        if (!isMultiSelectActive) return;
-        
-        if (!event.selection) {
-            console.log("Brush cleared");
+        if (validLayers.length === 0) {
+            console.warn("No valid layers found for selection.");
             return;
         }
 
-        // Convert brush pixel coordinates to map coordinates
-        const [[x0, y0], [x1, y1]] = event.selection;
-        const sw = map.unproject([x0, y0]);
-        const ne = map.unproject([x1, y1]);
+        // Query features in the selected bounding box
+        const selectedFeatures = map.queryRenderedFeatures(
+            [map.project(bounds[0]), map.project(bounds[1])],
+            { layers: validLayers }
+        );
 
-        // Process the selection
-        const bounds = [sw, ne];
-        selectParcels(bounds);
-        
-        // Position the summary tooltip with improved boundary checking
-        if (event.sourceEvent) {
-            const mouseX = event.sourceEvent.clientX;
-            const mouseY = event.sourceEvent.clientY;
-            
-            
-            const viewportWidth = window.innerWidth;
-            const viewportHeight = window.innerHeight;
-            
-           
-            const tooltipWidth = 420;
-            const tooltipHeight = 500;
-            const padding = 80; 
-            
-           
-            let tooltipX = mouseX + padding;
-            let tooltipY = mouseY - tooltipHeight/2; 
-            
-           
-            if (tooltipX + tooltipWidth > viewportWidth - padding) {
-                tooltipX = mouseX - tooltipWidth - padding;
-            }
-            
-           
-            if (tooltipY + tooltipHeight > viewportHeight - padding) {
-                tooltipY = viewportHeight - tooltipHeight - padding;
-            }
-            if (tooltipY < padding) {
-                tooltipY = padding;
-            }
-            
-            
-            tooltipX = Math.max(padding, Math.min(viewportWidth - tooltipWidth - padding, tooltipX));
-            tooltipY = Math.max(padding, Math.min(viewportHeight - tooltipHeight - padding, tooltipY));
-            
-        
-            d3.select("#summary-tooltip")
-                .style("left", `${tooltipX}px`)
-                .style("top", `${tooltipY}px`)
-                .style("right", "auto")
-                .style("bottom", "auto")
-                .style("max-height", `${viewportHeight - (padding * 2)}px`)
-                .style("overflow-y", "auto"); 
+        if (selectedFeatures.length === 0) {
+            console.log("No parcels selected.");
+            return;
         }
-        
-        // Clear the brush selection after processing
-        d3.brush().move(brushGroup, null);
+
+        console.log("Selected Parcels:", selectedFeatures);
+        highlightSelectedParcels(selectedFeatures);
     }
 
-function selectParcels(bounds) {
-    // Start with the simplified noise layer
-    const queryLayers = ['simplified-noise-layer'];
+    const noiseLevelMapping = {
+        "Pink": "60 - 70 dB",
+        "Orange": "50 - 55 dB",
+        "Yellow": "45 - 50 dB",
+        "Red": "55 - 60 dB"
+    };
 
-    // Add dynamically generated parcel layers
-    for (let i = 0; i < currentBatchIndex; i++) {
-        queryLayers.push(`parcels-${i}`);
+    const noiseMidpointMapping = {
+        "Pink": 65,   // Midpoint for 60 - 70 dB
+        "Orange": 52.5, // Midpoint for 50 - 55 dB
+        "Yellow": 47.5, // Midpoint for 45 - 50 dB
+        "Red": 57.5    // Midpoint for 55 - 60 dB
+    };
+
+    function calculateAverageNoiseLevel(selectedFeatures) {
+        let totalNoise = 0;
+        let count = 0;
+
+        // Loop through selected parcels and sum their noise levels
+        selectedFeatures.forEach(feature => {
+            const noiseColor = feature.properties.noiseColor;
+            if (noiseColor && noiseMidpointMapping[noiseColor] !== undefined) {
+                totalNoise += noiseMidpointMapping[noiseColor];
+                count++;
+            }
+        });
+
+        // Calculate and return the average noise level
+        return count > 0 ? totalNoise / count : 0; // Avoid division by zero
     }
 
-    // Filter out layers that do not exist
-    const validLayers = queryLayers.filter(layer => map.getLayer(layer));
+    function calculateSummaryStatistics(selectedFeatures) {
+        if (!selectedFeatures.length) {
+            d3.select("#summary-tooltip").style("opacity", 0);
+            return;
+        }
 
-    
-    console.log("Available layers before selection:", map.getStyle().layers.map(l => l.id));
-    console.log("Querying layers:", validLayers);
+        let totalBuildingValue = 0, totalLandValue = 0, totalValue = 0, totalLotSize = 0;
+        let totalNoise = 0;
+        let count = 0;
 
-    if (validLayers.length === 0) {
-        console.warn("No valid layers found for selection.");
-        return;
-    }
+        selectedFeatures.forEach(feature => {
+            const props = feature.properties;
+            
+            const buildingValue = parseFloat(props.BLDG_VAL) || 0;
+            const landValue = parseFloat(props.LAND_VAL) || 0;
+            const totalParcelValue = parseFloat(props.TOTAL_VAL) || 0;
+            const lotSize = parseFloat(props.LOT_SIZE) || 0;
+            const noiseColor = props.noiseColor;
 
-    // Query features in the selected bounding box
-    const selectedFeatures = map.queryRenderedFeatures(
-        [map.project(bounds[0]), map.project(bounds[1])],
-        { layers: validLayers }
-    );
+            totalBuildingValue += buildingValue;
+            totalLandValue += landValue;
+            totalValue += totalParcelValue;
+            totalLotSize += lotSize;
 
-    if (selectedFeatures.length === 0) {
-        console.log("No parcels selected.");
-        return;
-    }
-
-    console.log("Selected Parcels:", selectedFeatures);
-    highlightSelectedParcels(selectedFeatures);
-}
-
-const noiseLevelMapping = {
-    "Pink": "60 - 70 dB",
-    "Orange": "50 - 55 dB",
-    "Yellow": "45 - 50 dB",
-    "Red": "55 - 60 dB"
-};
-
-const noiseMidpointMapping = {
-    "Pink": 65,   // Midpoint for 60 - 70 dB
-    "Orange": 52.5, // Midpoint for 50 - 55 dB
-    "Yellow": 47.5, // Midpoint for 45 - 50 dB
-    "Red": 57.5    // Midpoint for 55 - 60 dB
-};
-
-function calculateAverageNoiseLevel(selectedFeatures) {
-    let totalNoise = 0;
-    let count = 0;
-
-    // Loop through selected parcels and sum their noise levels
-    selectedFeatures.forEach(feature => {
-        const noiseColor = feature.properties.noiseColor;
-        if (noiseColor && noiseMidpointMapping[noiseColor] !== undefined) {
-            totalNoise += noiseMidpointMapping[noiseColor];
+            // Sum the noise levels using the midpoint value for the noiseColor
+            if (noiseColor && noiseMidpointMapping[noiseColor] !== undefined) {
+                totalNoise += noiseMidpointMapping[noiseColor];
+            }
+            
             count++;
-        }
-    });
+        });
 
-    // Calculate and return the average noise level
-    return count > 0 ? totalNoise / count : 0; // Avoid division by zero
-}
+        if (count === 0) return;
 
-function calculateSummaryStatistics(selectedFeatures) {
-    if (!selectedFeatures.length) {
-        d3.select("#summary-tooltip").style("opacity", 0);
-        return;
+        const avgBuildingValue = totalBuildingValue / count;
+        const avgLandValue = totalLandValue / count;
+        const avgTotalValue = totalValue / count;
+        const avgLotSize = totalLotSize / count;
+
+        // Calculate the average noise level
+        const avgNoiseLevel = totalNoise / count;
+        const avgNoiseLabel = avgNoiseLevel > 0 ? `${avgNoiseLevel.toFixed(1)} dB` : 'No Data';
+
+        // Get mouse position from the last brush event
+        const summaryTooltip = d3.select("#summary-tooltip");
+        
+        // Update the summary tooltip with all statistics and create space for scatterplot
+        summaryTooltip
+            .style("opacity", 1)
+            .html(`
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="border-bottom: 1px solid #555; padding-bottom: 10px;">
+                        <h4 style="margin: 0 0 10px 0; font-size: 16px;">Selected Area Summary</h4>
+                        <p style="margin: 5px 0;"><strong>Selected Parcels:</strong> ${count}</p>
+                        <p style="margin: 5px 0;"><strong>Avg Building Value:</strong> $${avgBuildingValue.toLocaleString()}</p>
+                        <p style="margin: 5px 0;"><strong>Avg Land Value:</strong> $${avgLandValue.toLocaleString()}</p>
+                        <p style="margin: 5px 0;"><strong>Avg Total Value:</strong> $${avgTotalValue.toLocaleString()}</p>
+                        <p style="margin: 5px 0;"><strong>Avg Lot Size:</strong> ${avgLotSize.toLocaleString()} sq ft</p>
+                        <p style="margin: 5px 0;"><strong>Avg Noise Level:</strong> ${avgNoiseLabel}</p>
+                    </div>
+                    
+                    <div id="scatterplot-container">
+                        <h4 style="margin: 0 0 10px 0; font-size: 16px;">Building Value vs. Noise Level</h4>
+                        <svg id="scatterplot" width="380" height="280"></svg>
+                    </div>
+                    
+                    <button id="close-summary-btn" style="align-self: flex-end; background: #444; color: white; border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 14px;">Close</button>
+                </div>
+            `);
+            
+        // Add event listener to close button
+        setTimeout(() => {
+            const closeBtn = document.getElementById('close-summary-btn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    summaryTooltip.style("opacity", 0);
+                    clearSelectedParcels();
+                });
+            }
+            
+            // Draw scatterplot inside the summary tooltip
+            if (count > 5) {
+                drawScatterplot(selectedFeatures);
+            } else {
+                d3.select("#scatterplot")
+                    .append("text")
+                    .attr("x", 190)
+                    .attr("y", 140)
+                    .attr("text-anchor", "middle")
+                    .attr("fill", "white")
+                    .text("Not enough data for analysis (need > 5 parcels)");
+            }
+        }, 10);
     }
 
-    let totalBuildingValue = 0, totalLandValue = 0, totalValue = 0, totalLotSize = 0;
-    let totalNoise = 0;
-    let count = 0;
+    function highlightSelectedParcels(selectedFeatures) {
+        const selectedGeoJSON = {
+            type: "FeatureCollection",
+            features: selectedFeatures
+        };
 
-    selectedFeatures.forEach(feature => {
-        const props = feature.properties;
-        
-        const buildingValue = parseFloat(props.BLDG_VAL) || 0;
-        const landValue = parseFloat(props.LAND_VAL) || 0;
-        const totalParcelValue = parseFloat(props.TOTAL_VAL) || 0;
-        const lotSize = parseFloat(props.LOT_SIZE) || 0;
-        const noiseColor = props.noiseColor;
+        if (map.getSource("selected-parcels")) {
+            map.getSource("selected-parcels").setData(selectedGeoJSON);
+        } else {
+            map.addSource("selected-parcels", {
+                type: "geojson",
+                data: selectedGeoJSON
+            });
 
-        totalBuildingValue += buildingValue;
-        totalLandValue += landValue;
-        totalValue += totalParcelValue;
-        totalLotSize += lotSize;
-
-        // Sum the noise levels using the midpoint value for the noiseColor
-        if (noiseColor && noiseMidpointMapping[noiseColor] !== undefined) {
-            totalNoise += noiseMidpointMapping[noiseColor];
-        }
-        
-        count++;
-    });
-
-    if (count === 0) return;
-
-    const avgBuildingValue = totalBuildingValue / count;
-    const avgLandValue = totalLandValue / count;
-    const avgTotalValue = totalValue / count;
-    const avgLotSize = totalLotSize / count;
-
-    // Calculate the average noise level
-    const avgNoiseLevel = totalNoise / count;
-    const avgNoiseLabel = avgNoiseLevel > 0 ? `${avgNoiseLevel.toFixed(1)} dB` : 'No Data';
-
-    // Get mouse position from the last brush event
-    const summaryTooltip = d3.select("#summary-tooltip");
-    
-    // Update the summary tooltip with all statistics and create space for scatterplot
-    summaryTooltip
-        .style("opacity", 1)
-        .html(`
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-                <div style="border-bottom: 1px solid #555; padding-bottom: 10px;">
-                    <h4 style="margin: 0 0 10px 0; font-size: 16px;">Selected Area Summary</h4>
-                    <p style="margin: 5px 0;"><strong>Selected Parcels:</strong> ${count}</p>
-                    <p style="margin: 5px 0;"><strong>Avg Building Value:</strong> $${avgBuildingValue.toLocaleString()}</p>
-                    <p style="margin: 5px 0;"><strong>Avg Land Value:</strong> $${avgLandValue.toLocaleString()}</p>
-                    <p style="margin: 5px 0;"><strong>Avg Total Value:</strong> $${avgTotalValue.toLocaleString()}</p>
-                    <p style="margin: 5px 0;"><strong>Avg Lot Size:</strong> ${avgLotSize.toLocaleString()} sq ft</p>
-                    <p style="margin: 5px 0;"><strong>Avg Noise Level:</strong> ${avgNoiseLabel}</p>
-                </div>
-                
-                <div id="scatterplot-container">
-                    <h4 style="margin: 0 0 10px 0; font-size: 16px;">Building Value vs. Noise Level</h4>
-                    <svg id="scatterplot" width="380" height="280"></svg>
-                </div>
-                
-                <button id="close-summary-btn" style="align-self: flex-end; background: #444; color: white; border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 14px;">Close</button>
-            </div>
-        `);
-        
-    // Add event listener to close button
-    setTimeout(() => {
-        const closeBtn = document.getElementById('close-summary-btn');
-        if (closeBtn) {
-            closeBtn.addEventListener('click', () => {
-                summaryTooltip.style("opacity", 0);
-                clearSelectedParcels();
+            map.addLayer({
+                id: "selected-parcels-layer",
+                type: "line",
+                source: "selected-parcels",
+                paint: {
+                    "line-color": "#ffffff",
+                    "line-width": 3
+                }
             });
         }
         
-        // Draw scatterplot inside the summary tooltip
-        if (count > 5) {
-            drawScatterplot(selectedFeatures);
-        } else {
-            d3.select("#scatterplot")
-                .append("text")
-                .attr("x", 190)
-                .attr("y", 140)
-                .attr("text-anchor", "middle")
-                .attr("fill", "white")
-                .text("Not enough data for analysis (need > 5 parcels)");
-        }
-    }, 10);
-}
-
-function highlightSelectedParcels(selectedFeatures) {
-    const selectedGeoJSON = {
-        type: "FeatureCollection",
-        features: selectedFeatures
-    };
-
-    if (map.getSource("selected-parcels")) {
-        map.getSource("selected-parcels").setData(selectedGeoJSON);
-    } else {
-        map.addSource("selected-parcels", {
-            type: "geojson",
-            data: selectedGeoJSON
-        });
-
-        map.addLayer({
-            id: "selected-parcels-layer",
-            type: "line",
-            source: "selected-parcels",
-            paint: {
-                "line-color": "#ffffff",
-                "line-width": 3
-            }
-        });
+        // Set flag indicating we have selected parcels
+        hasSelectedParcels = selectedFeatures.length > 0;
+        
+        // Calculate and display summary
+        calculateSummaryStatistics(selectedFeatures);
     }
-    
-    // Set flag indicating we have selected parcels
-    hasSelectedParcels = selectedFeatures.length > 0;
-    
-    // Calculate and display summary
-    calculateSummaryStatistics(selectedFeatures);
-}
 
-function clearSelectedParcels() {
-    if (map.getSource("selected-parcels")) {
-        // Clear selection by setting empty features array
-        map.getSource("selected-parcels").setData({
-            type: "FeatureCollection",
-            features: []
-        });
-        
-        // Hide the summary tooltip
-        d3.select("#summary-tooltip").style("opacity", 0);
-        
-        // Reset the flag
-        hasSelectedParcels = false;
-        
-        console.log("Selection cleared");
-    }
-}
-
-function setupParcelClickHandler() {
-    // Create a single popup instance to reuse
-    let currentPopup = null;
-
-    // Add click handler for both simplified and detailed views
-    map.on('click', (e) => {
-        // First, remove any existing popup
-        if (currentPopup) {
-            currentPopup.remove();
-            currentPopup = null;
-        }
-        
-        // Query both simplified and detailed layers
-        const layers = ['simplified-noise-layer'];
-        
-        // Add all detail layers that might exist
-        for (let i = 0; i < currentBatchIndex; i++) {
-            layers.push(`parcels-${i}`);
-        }
-        
-        // Find the features at click point from all layers
-        const features = map.queryRenderedFeatures(e.point, {
-            layers: layers.filter(layer => map.getLayer(layer))
-        });
-        
-        // First, clear any existing selection if we have one
-        if (hasSelectedParcels) {
-            clearSelectedParcels();
+    function clearSelectedParcels() {
+        if (map.getSource("selected-parcels")) {
+            // Clear selection by setting empty features array
+            map.getSource("selected-parcels").setData({
+                type: "FeatureCollection",
+                features: []
+            });
             
-            // If this was just a click to clear selection, and not on a parcel, 
-            // then exit early to avoid showing a popup
+            // Hide the summary tooltip
+            d3.select("#summary-tooltip").style("opacity", 0);
+            
+            // Reset the flag
+            hasSelectedParcels = false;
+            
+            console.log("Selection cleared");
+        }
+    }
+
+    function setupParcelClickHandler() {
+        // Create a single popup instance to reuse
+        let currentPopup = null;
+
+        // Add click handler for both simplified and detailed views
+        map.on('click', (e) => {
+            // First, remove any existing popup
+            if (currentPopup) {
+                currentPopup.remove();
+                currentPopup = null;
+            }
+            
+            // Query both simplified and detailed layers
+            const layers = ['simplified-noise-layer'];
+            
+            // Add all detail layers that might exist
+            for (let i = 0; i < currentBatchIndex; i++) {
+                layers.push(`parcels-${i}`);
+            }
+            
+            // Find the features at click point from all layers
+            const features = map.queryRenderedFeatures(e.point, {
+                layers: layers.filter(layer => map.getLayer(layer))
+            });
+            
+            // First, clear any existing selection if we have one
+            if (hasSelectedParcels) {
+                clearSelectedParcels();
+                
+                // If this was just a click to clear selection, and not on a parcel, 
+                // then exit early to avoid showing a popup
+                if (!features.length) {
+                    return;
+                }
+            }
+            
             if (!features.length) {
                 return;
             }
-        }
+            
+            // Get the first clicked feature
+            const feature = features[0];
+            const props = feature.properties;
+            
+            // Format the properties into HTML
+            let html = '<div class="parcel-popup">';
+            html += `<h3>Parcel Information</h3>`;
+            
+            // Check and format common properties
+            const address = props.SITE_ADDR || props.SITE_ADDR_L || 'Not available';
+            const buildingValue = props.BLDG_VAL ? `$${Number(props.BLDG_VAL).toLocaleString()}` : 'N/A';
+            const landValue = props.LAND_VAL ? `$${Number(props.LAND_VAL).toLocaleString()}` : 'N/A';
+            const totalValue = props.TOTAL_VAL ? `$${Number(props.TOTAL_VAL).toLocaleString()}` : 'N/A';
+
+            const noiseLevel = noiseLevelMapping[props.noiseColor] || "Unknown Noise Level"; // Lookup the label
+
+            html += `<p><strong>Address:</strong> ${address}</p>`;
+            html += `<p><strong>Building Value:</strong> ${buildingValue}</p>`;
+            html += `<p><strong>Land Value:</strong> ${landValue}</p>`;
+            html += `<p><strong>Total Value:</strong> ${totalValue}</p>`;
+            html += `<p><strong>Noise Level:</strong> ${noiseLevel}</p>`;
+            
+            // Add more properties if available
+            if (props.USE_CODE_SYMB) {
+                html += `<p><strong>Property Type:</strong> ${props.USE_CODE_SYMB}</p>`;
+            }
+            if (props.LOT_SIZE) {
+                html += `<p><strong>Lot Size:</strong> ${Number(props.LOT_SIZE).toLocaleString()} sq ft</p>`;
+            }
+            
+            html += '</div>';
+            
+            // Create new popup
+            currentPopup = new mapboxgl.Popup({
+                closeButton: true,
+                closeOnClick: true  // Make sure clicking elsewhere closes the popup
+            })
+                .setLngLat(e.lngLat)
+                .setHTML(html)
+                .addTo(map);
+                
+            // Add an event listener to clear the reference when popup is closed
+            currentPopup.on('close', () => {
+                currentPopup = null;
+            });
+        });
+    }
+
+    function drawScatterplot(features) {
+        console.log("Drawing scatterplot with", features.length, "features");
         
-        if (!features.length) {
+        const data = [];
+        
+        // Extract data from features
+        features.forEach(feature => {
+            const props = feature.properties;
+            const noiseColor = props.noiseColor;
+            
+            if (noiseColor && noiseMidpointMapping[noiseColor] !== undefined) {
+                const noise = noiseMidpointMapping[noiseColor];
+                const buildingValue = parseFloat(props.BLDG_VAL)/1000000; // Scale to millions
+                const lotSize = parseFloat(props.LOT_SIZE);
+
+                if (!isNaN(buildingValue)) {
+                    data.push({
+                        noise,
+                        buildingValue,
+                        lotSize: isNaN(lotSize) ? 0 : lotSize,
+                        color: noiseColor // Store original color for display
+                    });
+                }
+            }
+        });
+
+        if (!data.length) {
+            console.warn("No data available for scatterplot.");
             return;
         }
         
-        // Get the first clicked feature
-        const feature = features[0];
-        const props = feature.properties;
+        console.log("Plotting data:", data.length, "points");
         
-        // Format the properties into HTML
-        let html = '<div class="parcel-popup">';
-        html += `<h3>Parcel Information</h3>`;
-        
-        // Check and format common properties
-        const address = props.SITE_ADDR || props.SITE_ADDR_L || 'Not available';
-        const buildingValue = props.BLDG_VAL ? `$${Number(props.BLDG_VAL).toLocaleString()}` : 'N/A';
-        const landValue = props.LAND_VAL ? `$${Number(props.LAND_VAL).toLocaleString()}` : 'N/A';
-        const totalValue = props.TOTAL_VAL ? `$${Number(props.TOTAL_VAL).toLocaleString()}` : 'N/A';
-
-        const noiseLevel = noiseLevelMapping[props.noiseColor] || "Unknown Noise Level"; // Lookup the label
-
-        html += `<p><strong>Address:</strong> ${address}</p>`;
-        html += `<p><strong>Building Value:</strong> ${buildingValue}</p>`;
-        html += `<p><strong>Land Value:</strong> ${landValue}</p>`;
-        html += `<p><strong>Total Value:</strong> ${totalValue}</p>`;
-        html += `<p><strong>Noise Level:</strong> ${noiseLevel}</p>`;
-        
-        // Add more properties if available
-        if (props.USE_CODE_SYMB) {
-            html += `<p><strong>Property Type:</strong> ${props.USE_CODE_SYMB}</p>`;
-        }
-        if (props.LOT_SIZE) {
-            html += `<p><strong>Lot Size:</strong> ${Number(props.LOT_SIZE).toLocaleString()} sq ft</p>`;
+        // Make sure element exists before clearing it
+        const scatterplotElement = document.getElementById("scatterplot");
+        if (!scatterplotElement) {
+            console.error("Scatterplot SVG element not found");
+            return;
         }
         
-        html += '</div>';
-        
-        // Create new popup
-        currentPopup = new mapboxgl.Popup({
-            closeButton: true,
-            closeOnClick: true  // Make sure clicking elsewhere closes the popup
-        })
-            .setLngLat(e.lngLat)
-            .setHTML(html)
-            .addTo(map);
+        // Clear previous plot
+        d3.select("#scatterplot").selectAll("*").remove();
+
+        const svg = d3.select("#scatterplot"),
+            width = +svg.attr("width"),
+            height = +svg.attr("height"),
+            margin = { top: 20, right: 20, bottom: 40, left: 60 };
+
+        // Make scale domains more sensible for your data
+        const x = d3.scaleLinear()
+            .domain([45, 70]) // Adjusted domain for noise levels (dB)
+            .range([margin.left, width - margin.right]);
+
+        const y = d3.scaleLinear()
+            .domain([0, d3.max(data, d => d.buildingValue) * 1.1]).nice() // Add 10% padding
+            .range([height - margin.bottom, margin.top]);
+
+        const r = d3.scaleSqrt()
+            .domain([0, d3.max(data, d => d.lotSize)])
+            .range([3, 10]);
+
+        // Add axes with better labels
+        svg.append("g")
+            .attr("transform", `translate(0,${height - margin.bottom})`)
+            .call(d3.axisBottom(x))
+            .append("text")
+            .attr("x", width / 2)
+            .attr("y", 30) 
+            .attr("fill", "white")
+            .attr("font-size", "12px")
+            .text("Noise Level (dB)");
+
+        svg.append("g")
+            .attr("transform", `translate(${margin.left},0)`)
+            .call(d3.axisLeft(y))
+            .append("text")
+            .attr("transform", "rotate(-90)")
+            .attr("x", -height / 2)
+            .attr("y", -40)
+            .attr("fill", "white")
+            .attr("font-size", "12px")
+            .text("Building Value (millions $)");
+
+        // Add circles colored by noise category
+        svg.append("g")
+            .selectAll("circle")
+            .data(data)
+            .join("circle")
+            .attr("cx", d => x(d.noise))
+            .attr("cy", d => y(d.buildingValue))
+            .attr("r", d => r(d.lotSize))
+            .attr("fill", d => colorMapping[d.color] || "gray")
+            .attr("opacity", 0.7)
+            .attr("stroke", "white")
+            .attr("stroke-width", 0.5);
             
-        // Add an event listener to clear the reference when popup is closed
-        currentPopup.on('close', () => {
-            currentPopup = null;
-        });
-    });
-}
-
-function drawScatterplot(features) {
-    console.log("Drawing scatterplot with", features.length, "features");
-    
-    const data = [];
-    
-    // Extract data from features
-    features.forEach(feature => {
-        const props = feature.properties;
-        const noiseColor = props.noiseColor;
-        
-        if (noiseColor && noiseMidpointMapping[noiseColor] !== undefined) {
-            const noise = noiseMidpointMapping[noiseColor];
-            const buildingValue = parseFloat(props.BLDG_VAL)/1000000; // Scale to millions
-            const lotSize = parseFloat(props.LOT_SIZE);
-
-            if (!isNaN(buildingValue)) {
-                data.push({
-                    noise,
-                    buildingValue,
-                    lotSize: isNaN(lotSize) ? 0 : lotSize,
-                    color: noiseColor // Store original color for display
-                });
-            }
+        // Add trendline
+        if (data.length > 5) {
+            // Calculate linear regression
+            const xValues = data.map(d => d.noise);
+            const yValues = data.map(d => d.buildingValue);
+            
+            const n = xValues.length;
+            const sumX = xValues.reduce((a, b) => a + b, 0);
+            const sumY = yValues.reduce((a, b) => a + b, 0);
+            const sumXY = xValues.reduce((a, b, i) => a + b * yValues[i], 0);
+            const sumXX = xValues.reduce((a, b) => a + b * b, 0);
+            
+            const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+            const intercept = (sumY - slope * sumX) / n;
+            
+            // Add the trendline
+            const line = d3.line()
+                .x(d => x(d))
+                .y(d => y(intercept + slope * d));
+                
+            const xRange = [x.domain()[0], x.domain()[1]]; // Use the actual domain
+                
+            svg.append("path")
+                .datum(xRange)
+                .attr("fill", "none")
+                .attr("stroke", "red")
+                .attr("stroke-width", 2)
+                .attr("stroke-dasharray", "4")
+                .attr("d", line);
+                
+            // Add correlation coefficient and trend information
+            const correlation = calculateCorrelation(xValues, yValues);
+            
+            // Add correlation text (shortened for space)
+            svg.append("text")
+                .attr("x", margin.left + 5)
+                .attr("y", margin.top + 15)
+                .attr("fill", "white")
+                .attr("font-size", "11px")
+                .text(`Correlation: ${correlation.toFixed(2)}`);
+                
+            // Add trend description
+            svg.append("text")
+                .attr("x", width - margin.right - 100)
+                .attr("y", margin.top + 15)
+                .attr("fill", slope < 0 ? "#FF9999" : "#99FF99") // Red for negative, green for positive
+                .attr("font-size", "11px")
+                .text(slope < 0 ? "Value ↓ with noise" : "Value ↑ with noise");
         }
-    });
-
-    if (!data.length) {
-        console.warn("No data available for scatterplot.");
-        return;
-    }
-    
-    console.log("Plotting data:", data.length, "points");
-    
-    // Make sure element exists before clearing it
-    const scatterplotElement = document.getElementById("scatterplot");
-    if (!scatterplotElement) {
-        console.error("Scatterplot SVG element not found");
-        return;
-    }
-    
-    // Clear previous plot
-    d3.select("#scatterplot").selectAll("*").remove();
-
-    const svg = d3.select("#scatterplot"),
-        width = +svg.attr("width"),
-        height = +svg.attr("height"),
-        margin = { top: 20, right: 20, bottom: 40, left: 60 };
-
-    // Make scale domains more sensible for your data
-    const x = d3.scaleLinear()
-        .domain([45, 70]) // Adjusted domain for noise levels (dB)
-        .range([margin.left, width - margin.right]);
-
-    const y = d3.scaleLinear()
-        .domain([0, d3.max(data, d => d.buildingValue) * 1.1]).nice() // Add 10% padding
-        .range([height - margin.bottom, margin.top]);
-
-    const r = d3.scaleSqrt()
-        .domain([0, d3.max(data, d => d.lotSize)])
-        .range([3, 10]);
-
-    // Add axes with better labels
-    svg.append("g")
-        .attr("transform", `translate(0,${height - margin.bottom})`)
-        .call(d3.axisBottom(x))
-        .append("text")
-        .attr("x", width / 2)
-        .attr("y", 30) 
-        .attr("fill", "white")
-        .attr("font-size", "12px")
-        .text("Noise Level (dB)");
-
-    svg.append("g")
-        .attr("transform", `translate(${margin.left},0)`)
-        .call(d3.axisLeft(y))
-        .append("text")
-        .attr("transform", "rotate(-90)")
-        .attr("x", -height / 2)
-        .attr("y", -40)
-        .attr("fill", "white")
-        .attr("font-size", "12px")
-        .text("Building Value (millions $)");
-
-    // Add circles colored by noise category
-    svg.append("g")
-        .selectAll("circle")
-        .data(data)
-        .join("circle")
-        .attr("cx", d => x(d.noise))
-        .attr("cy", d => y(d.buildingValue))
-        .attr("r", d => r(d.lotSize))
-        .attr("fill", d => colorMapping[d.color] || "gray")
-        .attr("opacity", 0.7)
-        .attr("stroke", "white")
-        .attr("stroke-width", 0.5);
         
-    // Add trendline
-    if (data.length > 5) {
-        // Calculate linear regression
-        const xValues = data.map(d => d.noise);
-        const yValues = data.map(d => d.buildingValue);
-        
+        // Add compact legend
+        const legend = svg.append("g")
+            .attr("transform", `translate(${width - margin.right - 100}, ${margin.top + 30})`);
+            
+        Object.entries(noiseLevelMapping).forEach(([color, level], i) => {
+            legend.append("rect")
+                .attr("x", 0)
+                .attr("y", i * 18)
+                .attr("width", 12)
+                .attr("height", 12)
+                .attr("fill", colorMapping[color])
+                .attr("stroke", "white")
+                .attr("stroke-width", 0.5);
+                
+            legend.append("text")
+                .attr("x", 16)
+                .attr("y", i * 18 + 10)
+                .attr("font-size", "10px")
+                .attr("fill", "white")
+                .text(level);
+        });
+    }
+
+    // Helper function to calculate correlation coefficient
+    function calculateCorrelation(xValues, yValues) {
         const n = xValues.length;
         const sumX = xValues.reduce((a, b) => a + b, 0);
         const sumY = yValues.reduce((a, b) => a + b, 0);
         const sumXY = xValues.reduce((a, b, i) => a + b * yValues[i], 0);
         const sumXX = xValues.reduce((a, b) => a + b * b, 0);
+        const sumYY = yValues.reduce((a, b) => a + b * b, 0);
         
-        const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-        const intercept = (sumY - slope * sumX) / n;
+        const numerator = n * sumXY - sumX * sumY;
+        const denominator = Math.sqrt((n * sumXX - sumX * sumX) * (n * sumYY - sumY * sumY));
         
-        // Add the trendline
-        const line = d3.line()
-            .x(d => x(d))
-            .y(d => y(intercept + slope * d));
-            
-        const xRange = [x.domain()[0], x.domain()[1]]; // Use the actual domain
-            
-        svg.append("path")
-            .datum(xRange)
-            .attr("fill", "none")
-            .attr("stroke", "red")
-            .attr("stroke-width", 2)
-            .attr("stroke-dasharray", "4")
-            .attr("d", line);
-            
-        // Add correlation coefficient and trend information
-        const correlation = calculateCorrelation(xValues, yValues);
-        
-        // Add correlation text (shortened for space)
-        svg.append("text")
-            .attr("x", margin.left + 5)
-            .attr("y", margin.top + 15)
-            .attr("fill", "white")
-            .attr("font-size", "11px")
-            .text(`Correlation: ${correlation.toFixed(2)}`);
-            
-        // Add trend description
-        svg.append("text")
-            .attr("x", width - margin.right - 100)
-            .attr("y", margin.top + 15)
-            .attr("fill", slope < 0 ? "#FF9999" : "#99FF99") // Red for negative, green for positive
-            .attr("font-size", "11px")
-            .text(slope < 0 ? "Value ↓ with noise" : "Value ↑ with noise");
+        return denominator === 0 ? 0 : numerator / denominator;
     }
-    
-    // Add compact legend
-    const legend = svg.append("g")
-        .attr("transform", `translate(${width - margin.right - 100}, ${margin.top + 30})`);
-        
-    Object.entries(noiseLevelMapping).forEach(([color, level], i) => {
-        legend.append("rect")
-            .attr("x", 0)
-            .attr("y", i * 18)
-            .attr("width", 12)
-            .attr("height", 12)
-            .attr("fill", colorMapping[color])
-            .attr("stroke", "white")
-            .attr("stroke-width", 0.5);
-            
-        legend.append("text")
-            .attr("x", 16)
-            .attr("y", i * 18 + 10)
-            .attr("font-size", "10px")
-            .attr("fill", "white")
-            .text(level);
-    });
-}
-
-// Helper function to calculate correlation coefficient
-function calculateCorrelation(xValues, yValues) {
-    const n = xValues.length;
-    const sumX = xValues.reduce((a, b) => a + b, 0);
-    const sumY = yValues.reduce((a, b) => a + b, 0);
-    const sumXY = xValues.reduce((a, b, i) => a + b * yValues[i], 0);
-    const sumXX = xValues.reduce((a, b) => a + b * b, 0);
-    const sumYY = yValues.reduce((a, b) => a + b * b, 0);
-    
-    const numerator = n * sumXY - sumX * sumY;
-    const denominator = Math.sqrt((n * sumXX - sumX * sumX) * (n * sumYY - sumY * sumY));
-    
-    return denominator === 0 ? 0 : numerator / denominator;
-}
 
     // Object for legend text descriptions
     const noiseLevelDescriptions = {
@@ -1036,12 +1060,12 @@ function calculateCorrelation(xValues, yValues) {
             if (map.loaded()) {
                 initializeLoading();
                 setupKeyboardHandlers();
-                setupParcelHoverEffects(); // Add this line
+                setupParcelHoverEffects();
             } else {
                 map.on('load', () => {
                     initializeLoading();
                     setupKeyboardHandlers();
-                    setupParcelHoverEffects(); // Add this line
+                    setupParcelHoverEffects();
                 });
             }
         }
